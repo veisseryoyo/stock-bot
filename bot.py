@@ -21,11 +21,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# זיכרון תיק השקעות (בגרסה הבאה נוכל להוסיף מסד נתונים לשמירה קבועה)
 my_portfolio = {'T': 24} 
 
 def get_detailed_data(symbol):
-    # משיכת נתונים כולל היסטוריה לגרף
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?range=7d&interval=1d"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
@@ -34,43 +32,26 @@ def get_detailed_data(symbol):
         price = result['meta']['regularMarketPrice']
         prev_close = result['meta']['chartPreviousClose']
         change = ((price - prev_close) / prev_close) * 100
-        
-        # נתונים לגרף
         history = result['indicators']['quote'][0]['close']
         history = [round(x, 2) for x in history if x is not None]
-        
-        return {
-            "price": round(price, 2),
-            "change": round(change, 2),
-            "history": history,
-            "currency": result['meta']['currency']
-        }
+        return {"price": round(price, 2), "change": round(change, 2), "history": history, "currency": result['meta']['currency']}
     except: return None
 
 def get_graph_url(symbol, history):
-    # יצירת גרף שבועי נקי
     color = "00ff00" if history[-1] >= history[0] else "ff0000"
     chart_config = {
         "type": "line",
         "data": {
             "labels": ["" for _ in history],
-            "datasets": [{
-                "data": history,
-                "borderColor": f"#{color}",
-                "fill": False,
-                "pointRadius": 3
-            }]
+            "datasets": [{"data": history, "borderColor": f"#{color}", "fill": False, "pointRadius": 3}]
         },
-        "options": {
-            "title": {"display": True, "text": f"{symbol.upper()} - 7 Day Trend"},
-            "legend": {"display": False}
-        }
+        "options": {"title": {"display": True, "text": f"{symbol.upper()} - 7 Day Trend"}, "legend": {"display": False}}
     }
     return f"https://quickchart.io/chart?c={str(chart_config).replace(' ', '')}&width=400&height=200"
 
 @bot.event
 async def on_ready():
-    print(f'✅ המערכת של יהונתן מוכנה בפורט 8000!')
+    print('✅ המערכת של יהונתן מוכנה!')
 
 @bot.command()
 async def stock(ctx, symbol: str):
@@ -80,15 +61,8 @@ async def stock(ctx, symbol: str):
         embed = discord.Embed(title=f"📊 ניתוח מניית {symbol.upper()}", color=color)
         embed.add_field(name="💰 מחיר", value=f"${data['price']} {data['currency']}", inline=True)
         embed.add_field(name="📈 שינוי", value=f"{data['change']}%", inline=True)
-        
-        # הוספת הגרף
         embed.set_image(url=get_graph_url(symbol, data['history']))
-        
-        # פיצ'ר חדשות וניתוח
-        status = "💪 קנייה חזקה" if data['change'] > 2 else "😴 יציב"
-        embed.add_field(name="🧐 ניתוח מהיר", value=status, inline=False)
         embed.add_field(name="📰 חדשות", value=f"[לחדשות האחרונות](https://finance.yahoo.com/quote/{symbol})", inline=False)
-        
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol.upper()}.")
@@ -97,16 +71,24 @@ async def stock(ctx, symbol: str):
 async def p(ctx):
     embed = discord.Embed(title="💼 תיק ההשקעות של יהונתן", color=0x3498db)
     total_value = 0
-    
     for symbol, shares in my_portfolio.items():
         data = get_detailed_data(symbol)
         if data:
             val = data['price'] * shares
             total_value += val
-            embed.add_field(
-                name=f"{symbol.upper()} ({shares} יחידות)", 
-                value=f"שווי: `${val:,.2f}` | שינוי: {data['change']}%", 
-                inline=False
-            )
+            embed.add_field(name=f"{symbol.upper()} ({shares} יחידות)", value=f"שווי: ${val:,.2f} | שינוי: {data['change']}%", inline=False)
     
-    embed.add_field(name="💵 סה\"כ
+    # כאן היה התיקון - שימוש בגרש בודד למניעת שגיאת סינטקס
+    embed.add_field(name='💵 סה"כ שווי בדולר', value=f'**${total_value:,.2f}**', inline=False)
+    embed.set_footer(text=f"עודכן ב: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def add(ctx, symbol: str, shares: int):
+    symbol = symbol.upper()
+    my_portfolio[symbol] = my_portfolio.get(symbol, 0) + shares
+    await ctx.send(f"✅ יהונתן, הוספתי {shares} מניות של **{symbol}** לתיק!")
+
+if __name__ == "__main__":
+    keep_alive()
+    bot.run(os.environ.get('DISCORD_TOKEN'))
