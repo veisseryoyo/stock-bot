@@ -4,12 +4,11 @@ import requests
 import os
 from flask import Flask
 from threading import Thread
-import io
 
 # --- הגדרת פורט 8000 עבור Koyeb ---
 app = Flask('')
 @app.route('/')
-def home(): return "Bot is Healthy!"
+def home(): return "Bot is Alive"
 def run_flask(): app.run(host='0.0.0.0', port=8000)
 def keep_alive():
     t = Thread(target=run_flask)
@@ -39,42 +38,33 @@ def get_stock_details(symbol):
 
 @bot.event
 async def on_ready():
-    print('✅ המערכת הפיננסית של יהונתן באוויר!')
+    print('✅ הבוט של יהונתן מחובר!')
 
 @bot.command()
 async def stock(ctx, symbol: str):
     data = get_stock_details(symbol)
     if data:
         symbol = symbol.upper()
-        color = 0x2ecc71 if data['change'] >= 0 else 0xe74c3c
+        # יצירת גרף פשוט מאוד בלי תווים מיוחדים שיכולים לשבור את הבוט
+        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'Price',data:{data['history']},borderColor:'blue'}}]}}}}"
         
-        # יצירת הקישור לגרף בצורה פשוטה ונקייה
-        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'{symbol}',data:{data['history']},fill:true,backgroundColor:'rgba(0,255,0,0.1)',borderColor:'{ 'green' if data['change'] >= 0 else 'red' }'}}]}}}}"
-        
-        embed = discord.Embed(title=f"📊 ניתוח מניית {symbol}", color=color)
+        embed = discord.Embed(title=f"📊 מניית {symbol}", color=0x2ecc71)
         embed.add_field(name="💰 מחיר", value=f"${data['price']}", inline=True)
-        embed.add_field(name="📈 שינוי יומי", value=f"{data['change']:.2f}%", inline=True)
-        
-        # אנחנו שולחים את הקישור בתוך ה-Embed
+        embed.add_field(name="📈 שינוי", value=f"{data['change']:.2f}%", inline=True)
         embed.set_image(url=chart_url)
         
         await ctx.send(embed=embed)
     else:
-        await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol.upper()}.")
+        await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol}")
 
 @bot.command()
 async def p(ctx):
-    embed = discord.Embed(title="💼 תיק ההשקעות של יהונתן", color=0x3498db)
-    total_val = 0
+    # פקודת תיק פשוטה בטקסט רגיל כדי לוודא שזה עובד
+    msg = "💼 **תיק ההשקעות של יהונתן:**\n"
     for sym, shares in my_portfolio.items():
         d = get_stock_details(sym)
-        if d:
-            v = d['price'] * shares
-            total_val += v
-            embed.add_field(name=f"{sym} ({shares} יחידות)", value=f"שווי: ${v:,.2f}", inline=False)
-    
-    embed.add_field(name='💵 סה"כ שווי התיק', value=f'**${total_val:,.2f}**', inline=False)
-    await ctx.send(embed=embed)
+        if d: msg += f"🔹 {sym}: {shares} מניות | שווי: ${d['price']*shares:,.2f}\n"
+    await ctx.send(msg)
 
 if __name__ == "__main__":
     keep_alive()
