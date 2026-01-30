@@ -36,18 +36,6 @@ def get_stock_details(symbol):
         return {"price": round(price, 2), "change": round(change, 2), "history": history}
     except: return None
 
-def generate_graph_url(symbol, history):
-    color = "00ff00" if history[-1] >= history[0] else "ff0000"
-    chart_config = {
-        "type": "line",
-        "data": {
-            "labels": ["" for _ in history],
-            "datasets": [{"data": history, "borderColor": f"#{color}", "fill": False, "pointRadius": 4}]
-        },
-        "options": {"title": {"display": True, "text": f"7-Day Trend: {symbol.upper()}"}, "legend": {"display": False}}
-    }
-    return f"https://quickchart.io/chart?c={str(chart_config).replace(' ', '')}&width=400&height=200"
-
 @bot.event
 async def on_ready():
     print('✅ המערכת הפיננסית של יהונתן באוויר!')
@@ -56,15 +44,18 @@ async def on_ready():
 async def stock(ctx, symbol: str):
     data = get_stock_details(symbol)
     if data:
+        symbol = symbol.upper()
         color = 0x2ecc71 if data['change'] >= 0 else 0xe74c3c
-        embed = discord.Embed(title=f"📊 ניתוח מניית {symbol.upper()}", color=color)
+        
+        # הודעת טקסט מעוצבת
+        embed = discord.Embed(title=f"📊 ניתוח מניית {symbol}", color=color)
         embed.add_field(name="💰 מחיר", value=f"${data['price']}", inline=True)
-        embed.add_field(name="📈 שינוי", value=f"{data['change']}%", inline=True)
+        embed.add_field(name="📈 שינוי יומי", value=f"{data['change']}%", inline=True)
         
-        # הצגת הגרף בתוך ההודעה
-        embed.set_image(url=generate_graph_url(symbol, data['history']))
+        # יצירת קישור פשוט לגרף - שיטה שעוקפת חסימות
+        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'{symbol}',data:{data['history']},fill:false,borderColor:'green'}}]}}}}"
         
-        embed.add_field(name="📰 חדשות", value=f"[חדשות אחרונות {symbol.upper()}](https://finance.yahoo.com/quote/{symbol})", inline=False)
+        embed.set_image(url=chart_url)
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol.upper()}.")
@@ -80,7 +71,6 @@ async def p(ctx):
             total_val += v
             embed.add_field(name=f"{sym} ({shares} יחידות)", value=f"שווי: ${v:,.2f}", inline=False)
     
-    # שימוש בגרש בודד כדי למנוע שגיאת סה"כ
     embed.add_field(name='💵 סה"כ שווי התיק', value=f'**${total_val:,.2f}**', inline=False)
     await ctx.send(embed=embed)
 
