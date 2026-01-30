@@ -4,6 +4,7 @@ import requests
 import os
 from flask import Flask
 from threading import Thread
+import urllib.parse  # ספרייה חדשה לתיקון הקישורים
 
 # --- הגדרת פורט 8000 עבור Koyeb ---
 app = Flask('')
@@ -38,15 +39,20 @@ def get_stock_details(symbol):
 
 @bot.event
 async def on_ready():
-    print('✅ הבוט של יהונתן מחובר!')
+    print('✅ הבוט של יהונתן מחובר ומוכן לגרפים!')
 
 @bot.command()
 async def stock(ctx, symbol: str):
     data = get_stock_details(symbol)
     if data:
         symbol = symbol.upper()
-        # יצירת גרף פשוט מאוד בלי תווים מיוחדים שיכולים לשבור את הבוט
-        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'Price',data:{data['history']},borderColor:'blue'}}]}}}}"
+        
+        # יצירת הגדרות הגרף
+        chart_config = f"{{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'{symbol}',data:{data['history']},borderColor:'green',fill:false}}]}}}}"
+        
+        # התיקון הקריטי: הופך את הטקסט לקישור חוקי (URL Encoded)
+        encoded_config = urllib.parse.quote(chart_config)
+        chart_url = f"https://quickchart.io/chart?c={encoded_config}"
         
         embed = discord.Embed(title=f"📊 מניית {symbol}", color=0x2ecc71)
         embed.add_field(name="💰 מחיר", value=f"${data['price']}", inline=True)
@@ -59,12 +65,16 @@ async def stock(ctx, symbol: str):
 
 @bot.command()
 async def p(ctx):
-    # פקודת תיק פשוטה בטקסט רגיל כדי לוודא שזה עובד
-    msg = "💼 **תיק ההשקעות של יהונתן:**\n"
+    embed = discord.Embed(title="💼 התיק של יהונתן", color=0x3498db)
+    total_val = 0
     for sym, shares in my_portfolio.items():
         d = get_stock_details(sym)
-        if d: msg += f"🔹 {sym}: {shares} מניות | שווי: ${d['price']*shares:,.2f}\n"
-    await ctx.send(msg)
+        if d:
+            v = d['price'] * shares
+            total_val += v
+            embed.add_field(name=f"{sym} ({shares} יחידות)", value=f"שווי: ${v:,.2f}", inline=False)
+    embed.add_field(name='💵 סה"כ שווי', value=f'**${total_val:,.2f}**', inline=False)
+    await ctx.send(embed=embed)
 
 if __name__ == "__main__":
     keep_alive()
