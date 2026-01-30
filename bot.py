@@ -9,7 +9,7 @@ from threading import Thread
 app = Flask('')
 @app.route('/')
 def home(): return "I am alive!"
-def run_flask(): app.run(host='0.0.0.0', port=8080)
+def run_flask(): app.run(host='0.0.0.0', port=8000)
 def keep_alive():
     t = Thread(target=run_flask)
     t.daemon = True
