@@ -4,11 +4,12 @@ import requests
 import os
 from flask import Flask
 from threading import Thread
+from datetime import datetime, timedelta
 
-# --- מעקף Koyeb ---
+# --- מעקף Koyeb (Port 8000) ---
 app = Flask('')
 @app.route('/')
-def home(): return "I am alive!"
+def home(): return "Bot is Running!"
 def run_flask(): app.run(host='0.0.0.0', port=8000)
 def keep_alive():
     t = Thread(target=run_flask)
@@ -20,82 +21,118 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# "זיכרון" זמני (בגרסה הבאה נחבר מסד נתונים קבוע)
-# פורמט: { 'מניה': כמות }
+# תיק השקעות ברירת מחדל
 my_portfolio = {'T': 24} 
 
-def get_stock_info(symbol):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
+def get_detailed_stock(symbol):
+    # משיכת נתונים מורחבים כולל היסטוריה לגרף
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?range=7d&interval=1d"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers, timeout=10).json()
-        meta = res['chart']['result'][0]['meta']
-        price = meta['regularMarketPrice']
-        prev_close = meta['chartPreviousClose']
+        result = res['chart']['result'][0]
+        price = result['meta']['regularMarketPrice']
+        prev_close = result['meta']['chartPreviousClose']
         change = ((price - prev_close) / prev_close) * 100
-        return round(price, 2), round(change, 2)
+        
+        # הכנת נתונים לגרף
+        history = result['indicators']['quote'][0]['close']
+        history = [round(x, 2) for x in history if x is not None]
+        
+        return {
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "history": history,
+            "currency": result['meta']['currency']
+        }
     except:
-        return None, None
+        return None
+
+def create_graph_url(symbol, history):
+    # יצירת גרף ויזואלי באמצעות QuickChart API
+    labels = ["" for _ in history] # תוויות ריקות למראה נקי
+    data_str = ",".join(map(str, history))
+    color = "00ff00" if history[-1] >= history[0] else "ff0000"
+    
+    chart_config = {
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [{
+                "label": symbol.upper(),
+                "data": history,
+                "fill": True,
+                "backgroundColor": f"rgba({int(color[:2],16)}, {int(color[2:4],16)}, {int(color[4:],16)}, 0.1)",
+                "borderColor": f"#{color}",
+                "pointRadius": 0
+            }]
+        },
+        "options": {
+            "title": {"display": True, "text": f"7-Day Trend: {symbol.upper()}"},
+            "legend": {"display": False}
+        }
+    }
+    encoded_config = str(chart_config).replace(" ", "")
+    return f"https://quickchart.io/chart?c={encoded_config}&width=500&height=300"
 
 @bot.event
 async def on_ready():
-    print(f'✅ המערכת של יהונתן באוויר!')
+    print(f'✅ המערכת הפיננסית של יהונתן באוויר (Port 8000)')
 
-# פקודה 1: הצגת התיק המלא
+@bot.command()
+async def stock(ctx, symbol: str):
+    data = get_detailed_stock(symbol)
+    if data:
+        color = 0x2ecc71 if data['change'] >= 0 else 0xe74c3c
+        embed = discord.Embed(title=f"📊 ניתוח מניית {symbol.upper()}", color=color)
+        embed.add_field(name="💰 מחיר", value=f"${data['price']} {data['currency']}", inline=True)
+        embed.add_field(name="📈 שינוי", value=f"{data['change']}%", inline=True)
+        
+        # הוספת גרף
+        graph_url = create_graph_url(symbol, data['history'])
+        embed.set_image(url=graph_url)
+        
+        # לינקים לחדשות
+        embed.add_field(name="📰 חדשות", value=f"[לחץ כאן לחדשות {symbol.upper()}](https://finance.yahoo.com/quote/{symbol})", inline=False)
+        
+        await ctx.send(embed=embed)
+    else:
+        await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol.upper()}.")
+
 @bot.command()
 async def p(ctx):
-    embed = discord.Embed(title="🚀 המנהל הפיננסי של יהונתן", color=0x3498db)
-    total_portfolio_value = 0
+    embed = discord.Embed(title="💼 תיק ההשקעות של יהונתן", color=0x9b59b6)
+    total_value = 0
     
     for symbol, shares in my_portfolio.items():
-        price, change = get_stock_info(symbol)
-        if price:
-            value = price * shares
-            total_portfolio_value += value
-            emoji = "🟢" if change >= 0 else "🔴"
+        data = get_detailed_stock(symbol)
+        if data:
+            val = data['price'] * shares
+            total_value += val
             embed.add_field(
                 name=f"{symbol.upper()} ({shares} יחידות)", 
-                value=f"מחיר: `${price}` | שינוי: `{change}%` {emoji}\nשווי: `${value:,.2f}`", 
+                value=f"שווי: `${val:,.2f}` ({data['change']}%)", 
                 inline=False
             )
     
-    embed.add_field(name="💰 שווי תיק כולל", value=f"**${total_portfolio_value:,.2f}**", inline=False)
-    
-    # "ניתוח חכם"
-    if total_portfolio_value > 0:
-        advice = "התיק נראה יציב! כדאי להמשיך לעקוב." if total_portfolio_value > 500 else "זמן טוב להגדיל השקעות?"
-        embed.set_footer(text=f"ניתוח AI: {advice}")
-        
+    embed.add_field(name="💰 סה\"כ שווי תיק", value=f"**${total_value:,.2f}**", inline=False)
+    embed.set_footer(text=f"עודכן ב: {datetime.now().strftime('%H:%M:%S')}")
     await ctx.send(embed=embed)
 
-# פקודה 2: הוספת מניה לתיק
 @bot.command()
 async def add(ctx, symbol: str, shares: int):
-    symbol = symbol.upper()
-    my_portfolio[symbol] = my_portfolio.get(symbol, 0) + shares
-    await ctx.send(f"✅ יהונתן, הוספתי {shares} מניות של **{symbol}** לתיק שלך!")
+    my_portfolio[symbol.upper()] = my_portfolio.get(symbol.upper(), 0) + shares
+    await ctx.send(f"✅ נוספו {shares} מניות של {symbol.upper()} לתיק.")
 
-# פקודה 3: הסרת מניה
-@bot.command()
-async def remove(ctx, symbol: str):
-    symbol = symbol.upper()
-    if symbol in my_portfolio:
-        del my_portfolio[symbol]
-        await ctx.send(f"🗑️ המניה {symbol} הוסרה מהמעקב.")
-    else:
-        await ctx.send(f"❓ לא מצאתי את {symbol} בתיק שלך.")
-
-# פקודה 4: עזרה
 @bot.command()
 async def h(ctx):
-    help_text = (
-        "**פקודות זמינות:**\n"
-        "`!p` - הצגת התיק המלא שלך\n"
-        "`!stock [מניה]` - בדיקת מחיר מהירה\n"
-        "`!add [מניה] [כמות]` - הוספה לתיק\n"
-        "`!remove [מניה]` - הסרה מהתיק"
+    msg = (
+        "**מפקדת הבוט של יהונתן:**\n"
+        "`!stock [T/AAPL/NVDA]` - מחיר + גרף שבועי\n"
+        "`!p` - מצב התיק האישי שלך\n"
+        "`!add [סמל] [כמות]` - הוספה לתיק\n"
     )
-    await ctx.send(help_text)
+    await ctx.send(msg)
 
 if __name__ == "__main__":
     keep_alive()
