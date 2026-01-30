@@ -14,7 +14,7 @@ def home():
 
 def run_flask():
     # הבוט יקשיב בפורט 8000 ש-Koyeb מחפש
-    app.run(host='0.0.0.0', port=8080)
+    app.run(host='0.0.0.0', port=8000)
 
 def keep_alive():
     t = Thread(target=run_flask)
