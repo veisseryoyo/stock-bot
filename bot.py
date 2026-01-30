@@ -2,41 +2,38 @@ import discord
 from discord.ext import commands
 import requests
 import os
+from flask import Flask
+from threading import Thread
+
+# --- חלק המעקף עבור Koyeb ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "I am alive!"
+
+def run_flask():
+    # הבוט יקשיב בפורט 8000 ש-Koyeb מחפש
+    app.run(host='0.0.0.0', port=8000)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
+# ---------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# פונקציית משיכת נתונים מ-Yahoo Finance (חינמי וללא הגבלה)
-def get_stock(symbol):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        res = requests.get(url, headers=headers).json()
-        price = res['chart']['result'][0]['meta']['regularMarketPrice']
-        return round(price, 2)
-    except:
-        return None
-
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user.name} באוויר ומוכן לעזור ליהונתן!')
-
-@bot.command()
-async def stock(ctx, symbol):
-    """בודק מחיר של כל מניה: !stock NVDA"""
-    price = get_stock(symbol)
-    if price:
-        await ctx.send(f"📊 המחיר של **{symbol.upper()}** כרגע הוא: `${price}`")
-    else:
-        await ctx.send("❌ לא מצאתי את המניה הזו.")
+    print(f'✅ {bot.user.name} באוויר!')
 
 @bot.command()
 async def portfolio(ctx):
-    """התיק האישי שלך: !portfolio"""
-    price = get_stock("T")
-    if price:
-        total = price * 24
-        await ctx.send(f"💼 **התיק של יהונתן (AT&T):**\n💰 מחיר: `${price}`\n📉 שווי כולל: `${total:,.2f}`")
+    # הפונקציה המוכרת שלך
+    await ctx.send(f"💼 יהונתן, התיק שלך בבדיקה...")
 
-bot.run(os.environ.get('DISCORD_TOKEN'))
+if __name__ == "__main__":
+    keep_alive() # מפעיל את השרת שמרצה את ה-Health Check
+    bot.run(os.environ.get('DISCORD_TOKEN'))
