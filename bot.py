@@ -4,6 +4,7 @@ import requests
 import os
 from flask import Flask
 from threading import Thread
+import io
 
 # --- הגדרת פורט 8000 עבור Koyeb ---
 app = Flask('')
@@ -47,15 +48,16 @@ async def stock(ctx, symbol: str):
         symbol = symbol.upper()
         color = 0x2ecc71 if data['change'] >= 0 else 0xe74c3c
         
-        # הודעת טקסט מעוצבת
+        # יצירת הקישור לגרף בצורה פשוטה ונקייה
+        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'{symbol}',data:{data['history']},fill:true,backgroundColor:'rgba(0,255,0,0.1)',borderColor:'{ 'green' if data['change'] >= 0 else 'red' }'}}]}}}}"
+        
         embed = discord.Embed(title=f"📊 ניתוח מניית {symbol}", color=color)
         embed.add_field(name="💰 מחיר", value=f"${data['price']}", inline=True)
-        embed.add_field(name="📈 שינוי יומי", value=f"{data['change']}%", inline=True)
+        embed.add_field(name="📈 שינוי יומי", value=f"{data['change']:.2f}%", inline=True)
         
-        # יצירת קישור פשוט לגרף - שיטה שעוקפת חסימות
-        chart_url = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5,6,7],datasets:[{{label:'{symbol}',data:{data['history']},fill:false,borderColor:'green'}}]}}}}"
-        
+        # אנחנו שולחים את הקישור בתוך ה-Embed
         embed.set_image(url=chart_url)
+        
         await ctx.send(embed=embed)
     else:
         await ctx.send(f"❌ לא מצאתי נתונים עבור {symbol.upper()}.")
@@ -73,11 +75,6 @@ async def p(ctx):
     
     embed.add_field(name='💵 סה"כ שווי התיק', value=f'**${total_val:,.2f}**', inline=False)
     await ctx.send(embed=embed)
-
-@bot.command()
-async def add(ctx, symbol: str, shares: int):
-    my_portfolio[symbol.upper()] = my_portfolio.get(symbol.upper(), 0) + shares
-    await ctx.send(f"✅ נוספו {shares} מניות של {symbol.upper()}!")
 
 if __name__ == "__main__":
     keep_alive()
