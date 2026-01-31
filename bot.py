@@ -1,128 +1,81 @@
-import discord
-from discord.ext import commands, tasks
-import requests
-import os
-import psycopg2
-import urllib.parse
-from flask import Flask
-from threading import Thread
-
-# --- Flask ל-Koyeb ---
-app = Flask('')
-@app.route('/')
-def home(): return "Pro Bot Online"
-def run_flask(): app.run(host='0.0.0.0', port=8000)
-
-# --- חיבור למסד הנתונים ---
-def get_db_connection():
-    return psycopg2.connect("postgresql://postgres:Yoyov130113!@db.ouuieanhljwxiqlljwtv.supabase.co:5432/postgres")
-
-def db_execute(query, params):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(query, params)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def db_fetch(query, params=()):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(query, params)
-    res = cur.fetchall()
-    cur.close()
-    conn.close()
-    return res
-
-# --- פונקציות נתונים (מניות + קריפטו + חדשות) ---
-def get_data(symbol):
-    # תמיכה גם בקריפטו (למשל BTC-USD) וגם במניות
-    sym = symbol.upper()
-    if sym in ["BTC", "ETH", "SOL"]: sym += "-USD"
-    
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=1m"
+# --- פונקציות נתונים חדשות ---
+def get_market_indices():
+    indices = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "Dow Jones": "^DJI"}
+    results = {}
     headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        res = requests.get(url, headers=headers).json()
-        meta = res['chart']['result'][0]['meta']
-        return {"price": round(meta['regularMarketPrice'], 2), "prev": meta['chartPreviousClose']}
-    except: return None
+    for name, sym in indices.items():
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=1m"
+            res = requests.get(url, headers=headers).json()
+            meta = res['chart']['result'][0]['meta']
+            change = ((meta['regularMarketPrice'] - meta['chartPreviousClose']) / meta['chartPreviousClose']) * 100
+            results[name] = {"price": meta['regularMarketPrice'], "change": change}
+        except: continue
+    return results
 
-def get_news(symbol):
-    url = f"https://query1.finance.yahoo.com/v1/finance/search?q={symbol}"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        res = requests.get(url, headers=headers).json()
-        return res['news'][:3] # מחזיר 3 חדשות אחרונות
-    except: return []
-
-# --- הגדרות בוט ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+# --- פקודות חדשות לבוט ---
 
 @bot.command()
-async def add(ctx, symbol: str, shares: int, price: float):
-    """פקודה חדשה: !add [מניה] [כמות] [מחיר קנייה]"""
-    symbol = symbol.upper()
-    db_execute("INSERT INTO portfolios (user_id, symbol, shares, buy_price) VALUES (%s, %s, %s, %s)", 
-               (ctx.author.id, symbol, shares, price))
-    await ctx.send(f"✅ שמרתי {shares} מניות של {symbol} במחיר קנייה של ${price}")
-
-@bot.command()
-async def my_p(ctx):
-    """תיק השקעות כולל חישובי רווח והפסד (PNL)"""
-    data = db_fetch("SELECT symbol, SUM(shares), AVG(buy_price) FROM portfolios WHERE user_id = %s GROUP BY symbol", (ctx.author.id,))
-    if not data:
-        return await ctx.send("📪 התיק ריק.")
-    
-    embed = discord.Embed(title="💼 תיק ההשקעות המורחב של יהונתן", color=0x3498db)
-    total_invested = 0
-    total_current = 0
-
-    for sym, shares, avg_buy in data:
-        current = get_data(sym)
-        if current:
-            invested = shares * avg_buy
-            current_val = shares * current['price']
-            profit = current_val - invested
-            perc = (profit / invested) * 100 if invested > 0 else 0
-            
-            total_invested += invested
-            total_current += current_val
-            
-            status = "📈" if profit >= 0 else "📉"
-            embed.add_field(
-                name=f"{status} {sym} ({shares} יחידות)",
-                value=f"שווי: ${current_val:,.2f}\nרווח/הפסד: ${profit:,.2f} ({perc:.2f}%)",
-                inline=False
-            )
-
-    total_profit = total_current - total_invested
-    embed.set_footer(text=f"סה''כ שווי תיק: ${total_current:,.2f} | רווח כולל: ${total_profit:,.2f}")
+async def market(ctx):
+    """תמונת מצב של השווקים בעולם"""
+    indices = get_market_indices()
+    embed = discord.Embed(title="🌍 תמונת מצב שוק עולמי", color=0x9b59b6)
+    for name, data in indices.items():
+        emoji = "🟢" if data['change'] >= 0 else "🔴"
+        embed.add_field(name=name, value=f"{emoji} {data['price']:,.2f} ({data['change']:.2f}%)", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
-async def news(ctx, symbol: str):
-    """הבאת חדשות אחרונות על מניה או קריפטו"""
-    articles = get_news(symbol)
-    if not articles:
-        return await ctx.send(f"❌ לא מצאתי חדשות עבור {symbol}")
-    
-    embed = discord.Embed(title=f"📰 חדשות חמות: {symbol.upper()}", color=0xf1c40f)
-    for art in articles:
-        embed.add_field(name=art['title'], value=f"[לקריאה נוספת]({art['link']})", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def crypto(ctx, symbol: str):
-    """בדיקת מחיר קריפטו מהיר (BTC, ETH, SOL)"""
+async def convert(ctx, amount: float, symbol: str):
+    """כמה שווה X מניות בדולרים? לדוגמה: !convert 10 T"""
     data = get_data(symbol)
     if data:
-        await ctx.send(f"🪙 מחיר ה-{symbol.upper()} הוא כרגע: **${data['price']:,}**")
+        total = amount * data['price']
+        await ctx.send(f"💰 {amount} יחידות של {symbol.upper()} שוות כרגע **${total:,.2f}**")
     else:
-        await ctx.send("❌ מטבע לא נמצא.")
+        await ctx.send("❌ לא מצאתי את המניה.")
 
-if __name__ == "__main__":
-    Thread(target=run_flask, daemon=True).start()
-    bot.run(os.environ.get('DISCORD_TOKEN'))
+@bot.command()
+async def calc(ctx, budget: float, symbol: str):
+    """כמה מניות אני יכול לקנות בתקציב מסוים? לדוגמה: !calc 5000 TSLA"""
+    data = get_data(symbol)
+    if data:
+        count = budget / data['price']
+        await ctx.send(f"🛍️ עם תקציב של **${budget:,.2f}**, אתה יכול לקנות **{count:.2f}** מניות של {symbol.upper()}.")
+    else:
+        await ctx.send("❌ לא מצאתי את המניה.")
+
+@bot.command()
+async def top_movers(ctx):
+    """מציג מניות חמות לחיפוש מהיר"""
+    # רשימת מניות פופולריות לבדיקה מהירה
+    popular = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META"]
+    movers = []
+    for s in popular:
+        d = get_data(s)
+        if d:
+            change = ((d['price'] - d['prev']) / d['prev']) * 100
+            movers.append({"sym": s, "change": change})
+    
+    movers.sort(key=lambda x: abs(x['change']), reverse=True)
+    embed = discord.Embed(title="🔥 המניות הכי תנודתיות היום", color=0xe67e22)
+    for m in movers[:5]:
+        emoji = "📈" if m['change'] >= 0 else "📉"
+        embed.add_field(name=m['sym'], value=f"{emoji} {m['change']:.2f}%", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def help_me(ctx):
+    """מדריך פקודות לבוט של יהונתן"""
+    msg = """
+**🤖 פקודות הבוט הפיננסי של יהונתן:**
+`!stock [SYM]` - מחיר נוכחי + גרף
+`!crypto [SYM]` - מחיר קריפטו (BTC, ETH...)
+`!add [SYM] [כמות] [מחיר]` - הוספה לתיק השמור
+`!my_p` - הצגת תיק ההשקעות ורווח/הפסד
+`!news [SYM]` - חדשות אחרונות
+`!market` - מצב המדדים המובילים (S&P 500...)
+`!calc [תקציב] [SYM]` - כמה אפשר לקנות ב-$
+`!convert [כמות] [SYM]` - שווי המניות ב-$
+    """
+    await ctx.send(msg)
