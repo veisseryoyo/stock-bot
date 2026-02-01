@@ -8,45 +8,51 @@ from flask import Flask
 from threading import Thread
 from datetime import datetime, time, timedelta
 
-# --- Flask Server (Keep Alive) ---
+# --- Flask Server (שומר על הבוט פעיל ב-Koyeb) ---
 app = Flask('')
 @app.route('/')
-def home(): return "Yoyo Bloomberg Bot is FULLY Active"
+def home(): return "Yoyo Bloomberg Bot is FULLY Operational"
 def run_flask(): app.run(host='0.0.0.0', port=8000)
 
-# --- Database Connection ---
+# --- חיבור למסד הנתונים Supabase ---
 DATABASE_URL = "postgresql://postgres:Yoyov130113!@db.ouuieanhljwxiqlljwtv.supabase.co:5432/postgres"
 
 def db_execute(query, params):
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute(query, params)
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(query, params)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Database Error: {e}")
 
 def db_fetch(query, params=()):
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute(query, params)
-    res = cur.fetchall()
-    cur.close()
-    conn.close()
-    return res
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute(query, params)
+        res = cur.fetchall()
+        cur.close()
+        conn.close()
+        return res
+    except Exception as e:
+        print(f"❌ Database Fetch Error: {e}")
+        return []
 
-# --- Data Fetching Engine ---
+# --- מנוע משיכת נתונים (מניות, קריפטו, היסטוריה וסטטיסטיקה) ---
 def get_data(symbol):
     sym = symbol.upper()
     if sym in ["BTC", "ETH", "SOL", "ADA", "DOGE"]: sym += "-USD"
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1d&interval=1m"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1mo&interval=1d"
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers, timeout=10).json()
-        meta = res['chart']['result'][0]['meta']
-        
-        hist_url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1mo&interval=1d"
-        hist_res = requests.get(hist_url, headers=headers).json()
-        history = [round(x, 2) for x in hist_res['chart']['result'][0]['indicators']['quote'][0]['close'] if x is not None]
+        result = res['chart']['result'][0]
+        meta = result['meta']
+        # מושך היסטוריית מחירים לניתוח RSI וגרפים
+        history = [round(x, 2) for x in result['indicators']['quote'][0]['close'] if x is not None]
         
         return {
             "price": round(meta['regularMarketPrice'], 2),
@@ -62,11 +68,18 @@ def get_full_stats(symbol):
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         res = requests.get(url, headers=headers).json()
-        data = res['quoteSummary']['result'][0]
-        return data
+        return res['quoteSummary']['result'][0]
     except: return None
 
-# --- Bot Setup ---
+def get_news(symbol):
+    url = f"https://query1.finance.yahoo.com/v1/finance/search?q={symbol.upper()}"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        res = requests.get(url, headers=headers).json()
+        return res.get('news', [])[:3]
+    except: return []
+
+# --- הגדרות הבוט ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -75,143 +88,125 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ יהונתן, כל המערכות פועלות! הבוט הכי מתקדם שלך באוויר.')
-    if not background_tasks.is_running(): background_tasks.start()
+    print(f'✅ יהונתן, הבוט המלא באוויר ללא קיצורים!')
+    if not alert_loop.is_running(): alert_loop.start()
+    if not daily_report_loop.is_running(): daily_report_loop.start()
 
-# --- Tasks ---
-@tasks.loop(minutes=10)
-async def background_tasks():
+# --- 🔄 מערכות אוטומטיות (Tasks) ---
+
+@tasks.loop(minutes=5)
+async def alert_loop():
     alerts = db_fetch("SELECT id, user_id, symbol, target_price FROM alerts WHERE active = True")
-    for alert_id, user_id, symbol, target in alerts:
-        d = get_data(symbol)
+    for a_id, u_id, sym, target in alerts:
+        d = get_data(sym)
         if d and d['price'] >= target:
-            for guild in bot.guilds:
-                member = guild.get_member(user_id)
-                if member:
-                    channel = discord.utils.get(guild.channels, name=f"💼-{member.display_name}".lower())
-                    if channel: await channel.send(f"🚨 **יהונתן, יעד הושג!** {symbol} חצתה את ${target}")
-                    db_execute("UPDATE alerts SET active = False WHERE id = %s", (alert_id,))
+            user = await bot.fetch_user(u_id)
+            if user:
+                try:
+                    await user.send(f"🚨 **התראת מחיר ליהונתן!** {sym} הגיעה ליעד: **${d['price']}**")
+                except: pass
+                db_execute("UPDATE alerts SET active = False WHERE id = %s", (a_id,))
 
-# --- NEW: Smart Analysis (RSI) ---
-@bot.command()
-async def analyze(ctx, symbol: str):
-    """מנתח אם המניה בקניית יתר או מכירת יתר"""
-    d = get_data(symbol)
-    if not d or len(d['history']) < 14: return await ctx.send("❌ אין מספיק נתונים לניתוח.")
-    
-    prices = d['history']
-    gains = []
-    losses = []
-    for i in range(1, len(prices)):
-        diff = prices[i] - prices[i-1]
-        gains.append(max(diff, 0))
-        losses.append(abs(min(diff, 0)))
-    
-    avg_gain = sum(gains[-14:]) / 14
-    avg_loss = sum(losses[-14:]) / 14
-    if avg_loss == 0: rsi = 100
-    else:
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-    
-    status = "🔴 קניית יתר (יקר)" if rsi > 70 else "🟢 מכירת יתר (זול)" if rsi < 30 else "🟡 נייטרלי"
-    embed = discord.Embed(title=f"🧠 ניתוח חכם: {symbol.upper()}", color=0x3498db)
-    embed.add_field(name="מדד RSI (14 יום)", value=f"{rsi:.2f}", inline=True)
-    embed.add_field(name="מצב שוק", value=status, inline=True)
-    embed.set_footer(text="ניתוח זה אינו המלצה פיננסית")
-    await ctx.send(embed=embed)
+@tasks.loop(time=time(hour=21, minute=30)) # 23:30 שעון ישראל
+async def daily_report_loop():
+    users = db_fetch("SELECT user_id FROM user_settings WHERE daily_updates = True")
+    for (u_id,) in users:
+        data = db_fetch("SELECT portfolio_name, symbol, SUM(shares), AVG(buy_price) FROM portfolios WHERE user_id = %s GROUP BY portfolio_name, symbol", (u_id,))
+        if not data: continue
+        embed = discord.Embed(title="🌙 דוח סוף יום מסחר", color=0x2c3e50, timestamp=datetime.now())
+        for p_name, sym, shares, avg_b in data:
+            d = get_data(sym)
+            if d:
+                pnl = (d['price'] - avg_b) * shares
+                embed.add_field(name=f"[{p_name}] {sym}", value=f"מחיר: ${d['price']} | רווח/הפסד: ${pnl:,.2f}", inline=False)
+        user = await bot.fetch_user(u_id)
+        if user: await user.send(embed=embed)
 
-# --- NEW: Top Movers ---
-@bot.command()
-async def top(ctx):
-    """מציג את המניות החמות ביותר כרגע"""
-    watch_list = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL", "META", "AMD"]
-    movers = []
-    for s in watch_list:
-        d = get_data(s)
-        if d: movers.append((s, d['change']))
-    
-    movers.sort(key=lambda x: x[1], reverse=True)
-    embed = discord.Embed(title="🔥 המניות החמות של היום", color=0xe67e22)
-    for s, c in movers:
-        emoji = "🚀" if c > 0 else "📉"
-        embed.add_field(name=s, value=f"{emoji} {c:.2f}%", inline=True)
-    await ctx.send(embed=embed)
-
-# --- NEW: Dividends Tracker ---
-@bot.command()
-async def dividends(ctx, symbol: str):
-    """בודק מתי חלוקת הדיבידנד הבאה"""
-    stats = get_full_stats(symbol)
-    if not stats: return await ctx.send("❌ לא נמצאו נתונים.")
-    
-    div_rate = stats['summaryDetail'].get('dividendRate', {}).get('fmt', 'N/A')
-    div_date = stats['summaryDetail'].get('exDividendDate', {}).get('fmt', 'N/A')
-    
-    embed = discord.Embed(title=f"💰 דיבידנדים: {symbol.upper()}", color=0x2ecc71)
-    embed.add_field(name="גובה דיבידנד (שנתי)", value=f"${div_rate}", inline=True)
-    embed.add_field(name="תאריך ה-Ex-Dividend", value=div_date, inline=True)
-    await ctx.send(embed=embed)
-
-# --- NEW: Copy Portfolio ---
-@bot.command()
-async def copy(ctx, user_to_copy: discord.Member, portfolio_name: str):
-    """מעתיק תיק של משתמש אחר לתוך תיק חדש שלך"""
-    data = db_fetch("SELECT symbol, shares, buy_price FROM portfolios WHERE user_id = %s AND portfolio_name = %s", (user_to_copy.id, portfolio_name))
-    if not data: return await ctx.send(f"❌ לא מצאתי תיק בשם {portfolio_name} אצל {user_to_copy.display_name}")
-    
-    new_p_name = f"Copied_{portfolio_name}"
-    for sym, shares, price in data:
-        db_execute("INSERT INTO portfolios (user_id, portfolio_name, symbol, shares, buy_price) VALUES (%s, %s, %s, %s, %s)", 
-                   (ctx.author.id, new_p_name, sym, shares, price))
-    
-    await ctx.send(f"✅ יהונתן, העתקתי את התיק של {user_to_copy.display_name} לתיק חדש אצלך בשם **{new_p_name}**!")
-
-# --- Core Portfolio Management ---
+# --- 💼 פקודות ניהול תיקים מרובים ---
 
 @bot.command()
 async def create_p(ctx, name: str):
-    await ctx.send(f"✅ תיק **{name}** נוצר. השתמש ב-`!add {name} SYM QTY` כדי למלא אותו.")
+    await ctx.send(f"✅ תיק בשם **{name}** נוצר. עכשיו תוכל להוסיף אליו מניות.")
+
+@bot.command()
+async def list_p(ctx):
+    data = db_fetch("SELECT DISTINCT portfolio_name FROM portfolios WHERE user_id = %s", (ctx.author.id,))
+    if not data: return await ctx.send("📪 אין לך תיקים עדיין.")
+    names = "\n".join([f"• {row[0]}" for row in data])
+    await ctx.send(f"📂 **התיקים שלך:**\n{names}")
 
 @bot.command()
 async def add(ctx, p_name: str, symbol: str, qty: float, price: float = 0):
     symbol = symbol.upper()
     if price == 0:
         d = get_data(symbol)
-        price = d['price'] if d else 0
-    db_execute("INSERT INTO portfolios (user_id, portfolio_name, symbol, shares, buy_price) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, p_name, symbol, qty, price))
-    await ctx.send(f"✅ הוספתי {qty} {symbol} לתיק {p_name}.")
+        if d: price = d['price']
+        else: return await ctx.send("❌ לא מצאתי מחיר שוק.")
+    db_execute("INSERT INTO portfolios (user_id, portfolio_name, symbol, shares, buy_price) VALUES (%s, %s, %s, %s, %s)", 
+               (ctx.author.id, p_name, symbol, qty, price))
+    await ctx.send(f"✅ נוסף לתיק {p_name}: **{qty}** יחידות של {symbol} ב מחיר **${price:,.2f}**")
 
 @bot.command()
 async def my_p(ctx, p_name: str = None):
-    q = "SELECT symbol, SUM(shares), AVG(buy_price) FROM portfolios WHERE user_id = %s"
-    p = [ctx.author.id]
-    if p_name:
-        q += " AND portfolio_name = %s GROUP BY symbol"; p.append(p_name)
-    else: q += " GROUP BY symbol"
+    query = "SELECT symbol, SUM(shares), AVG(buy_price) FROM portfolios WHERE user_id = %s"
+    params = [ctx.author.id]
+    if p_name: query += " AND portfolio_name = %s GROUP BY symbol"; params.append(p_name)
+    else: query += " GROUP BY symbol"
     
-    rows = db_fetch(q, tuple(p))
-    if not rows: return await ctx.send("📪 תיק ריק.")
-    
-    embed = discord.Embed(title=f"💼 תיק השקעות", color=0x9b59b6)
+    rows = db_fetch(query, tuple(params))
+    if not rows: return await ctx.send("📪 התיק ריק.")
+    embed = discord.Embed(title=f"💼 תיק: {p_name if p_name else 'כללי'}", color=0x3498db)
     total = 0
     for s, q, b in rows:
         d = get_data(s)
         if d:
-            curr_val = q * d['price']
-            total += curr_val
-            embed.add_field(name=s, value=f"כמות: {q} | שווי: ${curr_val:,.2f}", inline=False)
+            val = q * d['price']
+            total += val
+            embed.add_field(name=s, value=f"כמות: {q} | שווי: ${val:,.2f} | רווח: ${(d['price']-b)*q:,.2f}", inline=False)
     embed.set_footer(text=f"שווי כולל: ${total:,.2f}")
     await ctx.send(embed=embed)
 
+# --- 🧠 פקודות ניתוח חכם (RSI, Top, News, Dividends) ---
+
 @bot.command()
-async def stock(ctx, symbol: str):
+async def analyze(ctx, symbol: str):
     d = get_data(symbol)
-    if d:
-        chart = f"https://quickchart.io/chart?c={{type:'line',data:{{labels:[1,2,3,4,5],datasets:[{{label:'{symbol.upper()}',data:{d['history'][-5:]},borderColor:'blue'}}]}}}}"
-        e = discord.Embed(title=f"📊 {symbol.upper()}", color=0x2ecc71)
-        e.add_field(name="מחיר", value=f"${d['price']}"); e.set_image(url=chart)
-        await ctx.send(embed=e)
+    if not d or len(d['history']) < 14: return await ctx.send("❌ אין מספיק נתונים לניתוח.")
+    prices = d['history']
+    gains = [max(prices[i] - prices[i-1], 0) for i in range(1, len(prices))]
+    losses = [abs(min(prices[i] - prices[i-1], 0)) for i in range(1, len(prices))]
+    avg_g = sum(gains[-14:]) / 14
+    avg_l = sum(losses[-14:]) / 14
+    rsi = 100 - (100 / (1 + (avg_g / avg_l if avg_l != 0 else 100)))
+    status = "🔴 קניית יתר (יקר)" if rsi > 70 else "🟢 מכירת יתר (זול)" if rsi < 30 else "🟡 נייטרלי"
+    await ctx.send(f"🧠 ניתוח {symbol.upper()}: RSI הוא **{rsi:.2f}**. מצב: **{status}**")
+
+@bot.command()
+async def top(ctx):
+    watch = ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "GOOGL"]
+    embed = discord.Embed(title="🔥 המזיזות של השוק", color=0xe67e22)
+    for s in watch:
+        d = get_data(s)
+        if d: embed.add_field(name=s, value=f"${d['price']} ({d['change']:.2f}%)", inline=True)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def news(ctx, symbol: str):
+    articles = get_news(symbol)
+    if not articles: return await ctx.send("אין חדשות.")
+    embed = discord.Embed(title=f"📰 חדשות: {symbol.upper()}", color=0xf1c40f)
+    for a in articles: embed.add_field(name=a['title'], value=f"[לינק]({a['link']})", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def dividends(ctx, symbol: str):
+    s = get_full_stats(symbol)
+    if not s: return await ctx.send("אין נתונים.")
+    rate = s['summaryDetail'].get('dividendRate', {}).get('fmt', '0')
+    date = s['summaryDetail'].get('exDividendDate', {}).get('fmt', 'N/A')
+    await ctx.send(f"💰 {symbol.upper()}: דיבידנד שנתי ${rate} | תאריך קרוב: {date}")
+
+# --- 🛠️ פקודות עזר והתראות ---
 
 @bot.command()
 async def alert(ctx, symbol: str, price: float):
@@ -219,15 +214,33 @@ async def alert(ctx, symbol: str, price: float):
     await ctx.send(f"🎯 התראה נקבעה ל-{symbol.upper()} ב-${price}")
 
 @bot.command()
+async def copy(ctx, user: discord.Member, p_name: str):
+    data = db_fetch("SELECT symbol, shares, buy_price FROM portfolios WHERE user_id = %s AND portfolio_name = %s", (user.id, p_name))
+    if not data: return await ctx.send("התיק לא נמצא.")
+    for s, q, p in data:
+        db_execute("INSERT INTO portfolios (user_id, portfolio_name, symbol, shares, buy_price) VALUES (%s, %s, %s, %s, %s)", (ctx.author.id, f"Copy_{p_name}", s, q, p))
+    await ctx.send(f"✅ התיק של {user.display_name} הועתק!")
+
+@bot.command()
+async def risk(ctx):
+    data = db_fetch("SELECT symbol, SUM(shares * buy_price) FROM portfolios WHERE user_id = %s GROUP BY symbol", (ctx.author.id,))
+    if not data: return await ctx.send("אין נתונים.")
+    total = sum(row[1] for row in data)
+    embed = discord.Embed(title="⚠️ ניתוח חשיפה", color=0xe74c3c)
+    for s, v in data: embed.add_field(name=s, value=f"{(v/total)*100:.1f}% מהתיק")
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def setup(ctx):
+    overwrites = {ctx.guild.default_role: discord.PermissionOverwrite(read_messages=False), ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True), ctx.guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)}
+    channel = await ctx.guild.create_text_channel(f"💼-{ctx.author.display_name}", overwrites=overwrites)
+    await ctx.send(f"✅ חדר נוצר: {channel.mention}")
+
+@bot.command()
 async def help_me(ctx):
-    m = """**🤖 פקודות ה-VIP של יהונתן:**
-`!analyze [SYM]` - ניתוח חכם (RSI)
-`!top` - המניות הכי חזקות היום
-`!dividends [SYM]` - מתי תקבל כסף
-`!copy [@USER] [P_NAME]` - העתקת תיקים
-`!create_p [NAME]` | `!add [P_NAME] [SYM] [QTY]`
-`!my_p (P_NAME)` | `!stock [SYM]` | `!alert [SYM] [PRICE]`"""
-    await ctx.send(m)
+    msg = """**🤖 פקודות בוט yoyo:**
+`!create_p`, `!list_p`, `!add`, `!my_p`, `!analyze`, `!top`, `!news`, `!dividends`, `!alert`, `!copy`, `!risk`, `!setup`"""
+    await ctx.send(msg)
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
